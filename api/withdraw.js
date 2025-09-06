@@ -1,28 +1,34 @@
-// api/withdraw.js
+import admin from "firebase-admin";
 
-const fetch = require("node-fetch");
-const admin = require("firebase-admin");
+// Use dynamic import for node-fetch (to fix ESM error)
+const fetch = (url, options) => import("node-fetch").then(({ default: fetch }) => fetch(url, options));
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)),
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    }),
   });
 }
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { userId, bankCode, accountNumber, amount } = req.body;
+    // Parse JSON body safely
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    const { uid, amount, account_number, bank_code } = body;
 
-    if (!userId || !bankCode || !accountNumber || !amount) {
+    if (!uid || !amount || !account_number || !bank_code) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const db = admin.firestore();
-    const userRef = db.collection("users").doc(userId);
+    // Deduct from user balance in Firestore
+    const userRef = admin.firestore().collection("users").doc(uid);
     const userDoc = await userRef.get();
 
     if (!userDoc.exists) {
@@ -30,18 +36,17 @@ module.exports = async (req, res) => {
     }
 
     const userData = userDoc.data();
-
     if (userData.balance < amount) {
       return res.status(400).json({ error: "Insufficient balance" });
     }
 
-    // Deduct balance first
+    // Deduct balance
     await userRef.update({
-      balance: userData.balance - amount,
+      balance: admin.firestore.FieldValue.increment(-amount),
     });
 
-    // Create transfer recipient
-    const recipientResponse = await fetch("https://api.paystack.co/transferrecipient", {
+    // Create Paystack transfer recipient
+    const recipientResp = await fetch("https://api.paystack.co/transferrecipient", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
@@ -49,23 +54,22 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         type: "nuban",
-        name: userData.name || "User",
-        account_number: accountNumber,
-        bank_code: bankCode,
+        name: userData.name || "MVPay User",
+        account_number,
+        bank_code,
         currency: "NGN",
       }),
     });
-
-    const recipientData = await recipientResponse.json();
+    const recipientData = await recipientResp.json();
 
     if (!recipientData.status) {
       return res.status(400).json({ error: "Failed to create transfer recipient", details: recipientData });
     }
 
-    const recipientCode = recipientData.data.recipient_code;
+    const recipient_code = recipientData.data.recipient_code;
 
     // Initiate transfer
-    const transferResponse = await fetch("https://api.paystack.co/transfer", {
+    const transferResp = await fetch("https://api.paystack.co/transfer", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
@@ -73,29 +77,21 @@ module.exports = async (req, res) => {
       },
       body: JSON.stringify({
         source: "balance",
-        amount: amount * 100, // Paystack expects amount in kobo
-        recipient: recipientCode,
+        amount: amount * 100, // convert to kobo
+        recipient: recipient_code,
         reason: "User withdrawal",
       }),
     });
-
-    const transferData = await transferResponse.json();
+    const transferData = await transferResp.json();
 
     if (!transferData.status) {
-      // Rollback: add balance back
-      await userRef.update({
-        balance: userData.balance,
-      });
       return res.status(400).json({ error: "Transfer failed", details: transferData });
     }
 
-    return res.status(200).json({
-      message: "Withdrawal successful",
-      transfer: transferData.data,
-    });
+    return res.status(200).json({ success: true, transfer: transferData.data });
 
   } catch (error) {
-    console.error("Withdraw error:", error);
-    return res.status(500).json({ error: "Server error", details: error.message });
+    console.error("Withdraw API error:", error);
+    return res.status(500).json({ error: "Internal server error", details: error.message });
   }
-};
+}
