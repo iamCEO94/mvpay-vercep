@@ -1,4 +1,3 @@
-// pages/api/withdraw.js
 import admin from "firebase-admin";
 import fetch from "node-fetch";
 
@@ -17,6 +16,15 @@ const withdrawalTiers = [
 ];
 
 export default async function handler(req, res) {
+  // Allow CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (req.method !== "POST") {
     return res.status(405).json({ success: false, message: "Method not allowed. Use POST." });
   }
@@ -29,7 +37,6 @@ export default async function handler(req, res) {
 
   const numAmount = Number(amount);
 
-  // Check tiered amounts
   if (!withdrawalTiers.includes(numAmount)) {
     return res.status(400).json({
       success: false,
@@ -38,7 +45,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Get user from Firestore
     const userRef = db.collection("users").doc(uid);
     const userSnap = await userRef.get();
     if (!userSnap.exists) return res.status(404).json({ success: false, message: "User not found." });
@@ -46,14 +52,11 @@ export default async function handler(req, res) {
     const userData = userSnap.data();
     const balance = userData.balance || 0;
 
-    // Check balance
     if (numAmount > balance) return res.status(400).json({ success: false, message: "Insufficient balance." });
 
-    // Check if recipient_code exists
     let recipient_code = userData.paystackRecipientCode || null;
 
     if (!recipient_code) {
-      // Create Paystack transfer recipient
       const recipientRes = await fetch("https://api.paystack.co/transferrecipient", {
         method: "POST",
         headers: {
@@ -74,11 +77,9 @@ export default async function handler(req, res) {
 
       recipient_code = recipientData.data.recipient_code;
 
-      // Save recipient_code in user data
       await userRef.update({ paystackRecipientCode: recipient_code });
     }
 
-    // Execute Paystack transfer
     const transferRes = await fetch("https://api.paystack.co/transfer", {
       method: "POST",
       headers: {
@@ -88,7 +89,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         source: "balance",
         reason: `MVPay withdrawal for ${uid}`,
-        amount: numAmount * 100, // Paystack uses kobo
+        amount: numAmount * 100,
         recipient: recipient_code,
         currency: "NGN"
       })
@@ -97,11 +98,9 @@ export default async function handler(req, res) {
     const transferData = await transferRes.json();
     if (!transferData.status) return res.status(500).json({ success: false, message: `Paystack transfer failed: ${transferData.message}` });
 
-    // Deduct balance after successful transfer
     const newBalance = balance - numAmount;
     await userRef.update({ balance: newBalance });
 
-    // Log transaction
     await db.collection("transactions").add({
       uid,
       type: "withdrawal",
