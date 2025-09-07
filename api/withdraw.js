@@ -1,36 +1,39 @@
 import fetch from "node-fetch";
 import admin from "firebase-admin";
 
+// Init Firebase
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
+    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
   });
 }
 const db = admin.firestore();
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed. Use POST." });
+    return res.status(405).json({ success: false, message: "Method not allowed" });
   }
 
   try {
-    const { uid, amount, accountNumber, bankCode } = req.body;
+    const { uid, amount, bankCode, accountNumber } = req.body;
 
-    if (!uid || !amount || !accountNumber || !bankCode) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!uid || !amount || !bankCode || !accountNumber) {
+      return res.status(400).json({ success: false, message: "Missing parameters" });
     }
 
+    // Check user balance
     const userRef = db.collection("users").doc(uid);
     const userDoc = await userRef.get();
-
-    if (!userDoc.exists) return res.status(404).json({ error: "User not found" });
-
-    const userData = userDoc.data();
-    if ((userData.balance || 0) < amount) {
-      return res.status(400).json({ error: "Insufficient balance" });
+    if (!userDoc.exists) {
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    // Step 1: Create transfer recipient
+    const userData = userDoc.data();
+    if (userData.balance < amount) {
+      return res.status(400).json({ success: false, message: "Insufficient balance" });
+    }
+
+    // Create transfer recipient
     const recipientRes = await fetch("https://api.paystack.co/transferrecipient", {
       method: "POST",
       headers: {
@@ -45,15 +48,15 @@ export default async function handler(req, res) {
         currency: "NGN",
       }),
     });
-
     const recipientData = await recipientRes.json();
+
     if (!recipientData.status) {
-      return res.status(400).json({ error: "Failed to create recipient", details: recipientData.message });
+      return res.status(400).json({ success: false, message: "Failed to create recipient" });
     }
 
     const recipientCode = recipientData.data.recipient_code;
 
-    // Step 2: Initiate transfer
+    // Initiate transfer
     const transferRes = await fetch("https://api.paystack.co/transfer", {
       method: "POST",
       headers: {
@@ -62,25 +65,34 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         source: "balance",
-        amount: amount * 100, // convert to kobo
+        reason: "MVPay withdrawal",
+        amount: amount * 100, // in kobo
         recipient: recipientCode,
-        reason: "User withdrawal",
       }),
     });
-
     const transferData = await transferRes.json();
+
     if (!transferData.status) {
-      return res.status(400).json({ error: "Transfer failed", details: transferData.message });
+      return res.status(400).json({ success: false, message: "Transfer failed" });
     }
 
-    // Step 3: Deduct balance
+    // Update balance
     await userRef.update({
       balance: userData.balance - amount,
       totalWithdraw: (userData.totalWithdraw || 0) + amount,
     });
 
-    return res.json({ success: true, message: "Withdrawal initiated", data: transferData.data });
-  } catch (err) {
-    return res.status(500).json({ error: "Server error", details: err.message });
+    return res.status(200).json({
+      success: true,
+      message: "Withdrawal successful. Processing transfer.",
+      transfer: transferData.data,
+    });
+
+  } catch (error) {
+    console.error("Withdrawal error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "⚠️ Could not connect to MVPay withdrawal server. Try again later.",
+    });
   }
 }
