@@ -1,27 +1,36 @@
-// api/list-banks.js
-import fetch from "node-fetch";
-
-export default async function handler(req, res) {
+export default function handler(req, res) {
   if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({ error: "Method not allowed. Use GET." });
   }
 
-  try {
-    const response = await fetch("https://api.paystack.co/bank", {
-      headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      },
-    });
+  const banks = [
+    { name: "Access Bank", code: "044" },
+    { name: "Citibank", code: "023" },
+    { name: "Diamond Bank", code: "063" },
+    { name: "Ecobank Nigeria", code: "050" },
+    { name: "Fidelity Bank", code: "070" },
+    { name: "First Bank of Nigeria", code: "011" },
+    { name: "First City Monument Bank (FCMB)", code: "214" },
+    { name: "Globus Bank", code: "00103" },
+    { name: "Guaranty Trust Bank (GTB)", code: "058" },
+    { name: "Heritage Bank", code: "030" },
+    { name: "Keystone Bank", code: "082" },
+    { name: "Kuda Microfinance Bank", code: "50211" },
+    { name: "Moniepoint Microfinance Bank", code: "50515" },
+    { name: "OPay (Paycom)", code: "999992" },
+    { name: "PalmPay", code: "999991" },
+    { name: "Polaris Bank", code: "076" },
+    { name: "Providus Bank", code: "101" },
+    { name: "Stanbic IBTC Bank", code: "221" },
+    { name: "Standard Chartered Bank", code: "068" },
+    { name: "Sterling Bank", code: "232" },
+    { name: "Suntrust Bank", code: "100" },
+    { name: "Union Bank of Nigeria", code: "032" },
+    { name: "United Bank for Africa (UBA)", code: "033" },
+    { name: "Unity Bank", code: "215" },
+    { name: "Wema Bank", code: "035" },
+    { name: "Zenith Bank", code: "057" },
+  ];
 
-    const data = await response.json();
-
-    if (!data.status) {
-      return res.status(400).json({ error: "Failed to fetch banks", details: data });
-    }
-
-    return res.status(200).json(data.data); // returns bank list
-  } catch (error) {
-    console.error("Bank list error:", error);
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  return res.json(banks);
 }
