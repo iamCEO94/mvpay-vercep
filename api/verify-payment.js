@@ -1,19 +1,27 @@
-// api/verify-payment.js
 import fetch from "node-fetch";
+import admin from "firebase-admin";
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+  });
+}
+const db = admin.firestore();
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed. Use POST." });
   }
 
   try {
-    const { reference } = req.query;
+    const { reference, uid, amount } = req.body;
 
-    if (!reference) {
-      return res.status(400).json({ error: "Missing payment reference" });
+    if (!reference || !uid || !amount) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+    const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`;
+    const response = await fetch(verifyUrl, {
       headers: {
         Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
       },
@@ -21,19 +29,23 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    if (!data.status) {
-      return res.status(400).json({ error: "Verification failed", details: data });
+    if (data.status && data.data.status === "success") {
+      const userRef = db.collection("users").doc(uid);
+      await db.runTransaction(async (t) => {
+        const userDoc = await t.get(userRef);
+        if (!userDoc.exists) throw "User not found";
+        const newBalance = (userDoc.data().balance || 0) + Number(amount);
+        t.update(userRef, {
+          balance: newBalance,
+          totalRecharge: (userDoc.data().totalRecharge || 0) + Number(amount),
+        });
+      });
+
+      return res.json({ success: true, message: "Payment verified" });
+    } else {
+      return res.status(400).json({ error: "Payment verification failed" });
     }
-
-    // ✅ Here you would update Firebase user balance
-    // Example: update database with data.data.amount / 100
-
-    return res.status(200).json({
-      message: "Payment verified",
-      data: data.data,
-    });
-  } catch (error) {
-    console.error("Error verifying payment:", error);
-    return res.status(500).json({ error: "Internal server error" });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error", details: err.message });
   }
 }
