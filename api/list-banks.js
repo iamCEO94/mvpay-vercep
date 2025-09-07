@@ -1,11 +1,9 @@
-// /pages/api/list-banks.js
+// pages/api/list-banks.js
 export default function handler(req, res) {
-  // Only allow GET requests
   if (req.method !== "GET") {
     return res.status(405).json({ success: false, message: "Method not allowed. Use GET." });
   }
 
-  // Static list of banks
   const banks = [
     { name: "Access Bank", code: "044" },
     { name: "Citibank", code: "023" },
@@ -35,9 +33,8 @@ export default function handler(req, res) {
     { name: "Zenith Bank", code: "057" },
   ];
 
-  // Allow CORS if needed (optional, useful if frontend served separately)
+  // Optional: allow frontend from different origin
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  // Return success JSON
   return res.status(200).json({ success: true, banks });
 }
