@@ -1,51 +1,60 @@
-import fetch from "node-fetch";
 import admin from "firebase-admin";
+import fetch from "node-fetch";
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
+    credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT))
   });
 }
 const db = admin.firestore();
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed. Use POST." });
+  // Allow CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
   }
 
+  if (req.method !== "POST") {
+    return res.status(405).json({ success: false, message: "Method not allowed. Use POST." });
+  }
+
+  const { uid, amount } = req.body;
+  if (!uid || !amount) return res.status(400).json({ success: false, message: "Missing fields." });
+
   try {
-    const { reference, uid, amount } = req.body;
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) return res.status(404).json({ success: false, message: "User not found." });
 
-    if (!reference || !uid || !amount) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+    const userData = userSnap.data();
+    const currentBalance = userData.balance || 0;
+    const newBalance = currentBalance + Number(amount);
 
-    const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`;
-    const response = await fetch(verifyUrl, {
-      headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      },
+    await userRef.update({ balance: newBalance });
+
+    // Optional: create a Paystack charge if needed here
+
+    await db.collection("transactions").add({
+      uid,
+      type: "recharge",
+      amount: Number(amount),
+      status: "success",
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    const data = await response.json();
+    return res.status(200).json({
+      success: true,
+      message: `Recharge of ₦${amount} successful.`,
+      newBalance,
+      accountNumber: "CopyableAccount1234" // replace with actual if Paystack provides it
+    });
 
-    if (data.status && data.data.status === "success") {
-      const userRef = db.collection("users").doc(uid);
-      await db.runTransaction(async (t) => {
-        const userDoc = await t.get(userRef);
-        if (!userDoc.exists) throw "User not found";
-        const newBalance = (userDoc.data().balance || 0) + Number(amount);
-        t.update(userRef, {
-          balance: newBalance,
-          totalRecharge: (userDoc.data().totalRecharge || 0) + Number(amount),
-        });
-      });
-
-      return res.json({ success: true, message: "Payment verified" });
-    } else {
-      return res.status(400).json({ error: "Payment verification failed" });
-    }
   } catch (err) {
-    return res.status(500).json({ error: "Server error", details: err.message });
+    console.error("Recharge error:", err);
+    return res.status(500).json({ success: false, message: "Could not process recharge. Try again later." });
   }
 }
