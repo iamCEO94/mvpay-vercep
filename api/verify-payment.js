@@ -1,70 +1,42 @@
-import admin from "firebase-admin";
-import fetch from "node-fetch";
+const express = require('express');
+const cors = require('cors'); // Import the CORS middleware
+const crypto = require('crypto'); // Used to generate a random reference
 
-// Initialize Firebase Admin
-if (!admin.apps.length) {
-  const firebaseCred = {
-    type: process.env.FIREBASE_TYPE,
-    project_id: process.env.FIREBASE_PROJECT_ID,
-    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-    client_email: process.env.FIREBASE_CLIENT_EMAIL,
-    client_id: process.env.FIREBASE_CLIENT_ID,
-    auth_uri: process.env.FIREBASE_AUTH_URI,
-    token_uri: process.env.FIREBASE_TOKEN_URI,
-    auth_provider_x509_cert_url: process.env.FIREBASE_AUTH_PROVIDER,
-    client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL,
-  };
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-  admin.initializeApp({
-    credential: admin.credential.cert(firebaseCred)
-  });
-}
+// Enable CORS for all routes
+// This is the fix for the "Failed to fetch" error.
+app.use(cors());
 
-const db = admin.firestore();
+// Enable the app to parse JSON body from the frontend
+app.use(express.json());
 
-export default async function handler(req, res) {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+// ---
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ success: false, message: "Use POST" });
-
-  try {
-    const { reference, uid, amount } = req.body;
-    if (!reference || !uid || !amount) return res.status(400).json({ success: false, message: "Missing fields." });
-
-    const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
+// A simple POST endpoint to handle the payment initialization
+app.post('/', (req, res) => {
+    // You should use your own logic here to get a unique reference from Paystack's API
+    // This is a placeholder reference for demonstration purposes.
+    const transactionReference = crypto.randomBytes(16).toString('hex');
+    
+    // Log the request and the generated reference
+    console.log('Received a request from the frontend.');
+    console.log('Amount:', req.body.amount);
+    console.log('Generated transaction reference:', transactionReference);
+    
+    // Send back a JSON response to the frontend
+    res.status(200).json({
+        message: 'Transaction initialized',
+        reference: transactionReference
     });
+});
 
-    const verifyData = await verifyRes.json();
-    if (!verifyData.status) return res.status(400).json({ success: false, message: verifyData.message });
-
-    if (verifyData.data.status !== "success") return res.status(400).json({ success: false, message: "Payment not successful." });
-
-    const userRef = db.collection("users").doc(uid);
-    const userSnap = await userRef.get();
-    const currentBalance = userSnap.exists ? userSnap.data().balance || 0 : 0;
-    const newBalance = currentBalance + Number(amount);
-
-    await userRef.update({ balance: newBalance });
-
-    await db.collection("transactions").add({
-      uid,
-      type: "recharge",
-      amount: Number(amount),
-      reference,
-      status: "success",
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    return res.status(200).json({ success: true, message: "Payment verified successfully.", newBalance });
-
-  } catch (err) {
-    console.error("Verify payment error:", err);
-    return res.status(500).json({ success: false, message: "Could not connect to Paystack verification server." });
-  }
-}
+// Start the server
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log('---');
+    console.log('To test with your frontend, you need to change the BACKEND_URL in your HTML file to:');
+    console.log(`http://localhost:${PORT}`);
+    console.log('---');
+});
